@@ -33,6 +33,10 @@ repositories {
     }
 }
 
+configurations {
+    mockitoAgent
+}
+
 dependencies {
     profile "org.apache.grails.profiles:web"
     developmentOnly "org.springframework.boot:spring-boot-devtools" // Spring Boot DevTools may cause performance slowdowns or compatibility issues on larger applications
@@ -68,12 +72,21 @@ dependencies {
     testImplementation "org.apache.grails:grails-testing-support-web"
     testImplementation "org.mockito:mockito-core"
     testImplementation "org.spockframework:spock-core"
+    // Mockito's jar on its own, so tests can load it as a Java agent at startup (see the Test config below)
+    mockitoAgent platform("org.apache.grails:grails-bom:$grailsVersion")
+    mockitoAgent("org.mockito:mockito-core") { transitive = false }
 }
 
 compileJava.options.release = 21
 
 tasks.withType(Test).configureEach {
     useJUnitPlatform()
+    // Load Mockito's agent up front instead of letting it attach itself mid-test, which prints
+    // a warning and will be blocked by future JDKs: https://javadoc.io/doc/org.mockito/mockito-core/latest/org.mockito/org/mockito/Mockito.html#0.3
+    jvmArgs "-javaagent:${configurations.mockitoAgent.asPath}"
+    // Mockito adds a jar to the JVM's bootstrap classpath, which makes the JVM's startup cache
+    // (Class Data Sharing) print a warning. Turning the cache off for tests silences it.
+    jvmArgs "-Xshare:off"
 }
 
 assets {
