@@ -6,15 +6,15 @@ This file records what has been done, the problems hit along the way, and what c
 
 ## Current status
 
-**Next up: Round 4. Domain classes and GORM (`User`).**
+**Next up: Round 5. Registration and BCrypt.**
 
 | # | Round | Status | Commit |
 |---|---|---|---|
 | 1 | Groovy crash course and IntelliJ setup | ✅ Done | `5319da4`, `5dde12b` |
 | 2 | Tour of Grails and your first endpoint | ✅ Done | `87993b5` |
-| 3 | Postgres, `.env` and the Docker dev setup | ✅ Done | _(fill in the hash after committing)_ |
-| 4 | Domain classes and GORM (`User`) | ⏭️ Next | |
-| 5 | Registration and BCrypt | ⬜ | |
+| 3 | Postgres, `.env` and the Docker dev setup | ✅ Done | `8a019d4` |
+| 4 | Domain classes and GORM (`User`) | ✅ Done | _(fill in the hash after committing)_ |
+| 5 | Registration and BCrypt | ⏭️ Next | |
 | 6 | Login, JWT and the auth interceptor | ⬜ | |
 | 7 | Upload, list, download and delete files | ⬜ | |
 | 8 | Sharing files with other users | ⬜ | |
@@ -59,7 +59,9 @@ A user uploads files and can **share** them with other users. The uploader alway
 - **`api.http`** (IntelliJ HTTP Client) holds example requests for trying the API by hand. Add every new endpoint to it.
 - **Config comes from environment variables, with `.env` for local values.** `application.yml` uses `${DB_HOST:localhost}`-style placeholders. `.env` is gitignored; `.env.example` is committed and must list every variable without a default (`EnvExampleSpec` enforces this). New secrets (e.g. `JWT_SECRET` in Round 6) go in both files, and into `Application.REQUIRED_SETTINGS` if the app can't start without them.
 - **The `test` environment stays on H2 until Round 9**, so `./gradlew integrationTest` needs no Docker yet. H2 is a `testRuntimeOnly` dependency.
-- **Development uses `dbCreate: update`** (keeps data across restarts). Production is `none`, and Round 10 adds migrations.
+- **Development uses `dbCreate: update`** (keeps data across restarts). Production is `none`, and Round 10 adds migrations. `update` never changes an existing column, so after changing a constraint on an existing property, drop the table (or `down -v`) in development.
+- **Every required domain property says `nullable: false` explicitly.** Grails 8 made properties nullable by default (see Round 4). We chose explicit constraints over the global `grails.gorm.default.nullable: false` switch.
+- **Usernames are lowercase only** (`matches: /[a-z0-9_]+/`, 3 to 30 characters). Registration (Round 5) lowercases the input, so `Alice` and `alice` can't be two accounts.
 
 ---
 
@@ -164,29 +166,53 @@ A user uploads files and can **share** them with other users. The uploader alway
 **Commits**
 - `Round 3: switch to Postgres with .env config, add Docker dev setup and a db health check`
 
+### Round 4: Domain classes and GORM ✅
+
+**What was explained**
+- A domain class (`grails-app/domain`) ↔ a JPA `@Entity` plus its `JpaRepository`. GORM adds `id`, `version`, `save()`/`delete()`/`validate()`/`errors`, `get()`/`list()`/`count()` and dynamic finders.
+- `static constraints` ↔ Bean Validation annotations; `static mapping` ↔ `@Table`/`@Column`. Columns are snake_case automatically.
+- `dateCreated`/`lastUpdated` auto-timestamping ↔ `@CreatedDate`/`@LastModifiedDate`.
+- `save()` returns **null** on validation failure instead of throwing; `save(failOnError: true)` throws `ValidationException`; `flush: true` ↔ `saveAndFlush`.
+- Dynamic finders (`findByUsername`, `findAllByUsernameLike`, `countBy...`) ↔ Spring Data derived queries, but checked only when called. `where { }` queries for anything more complex.
+- `@Rollback` in integration tests ↔ `@Transactional` on a Spring test. `groovy.sql.Sql` ↔ `JdbcTemplate`.
+
+**What was built**
+- `grails-app/domain/com/example/User.groovy`: `username` (`nullable: false, blank: false, size: 3..30, matches: /[a-z0-9_]+/, unique: true`), `passwordHash` (`nullable: false, blank: false`), `Instant dateCreated/lastUpdated`, mapped to the table `users`.
+- `UserSpec` (`DomainUnitTest`, in-memory GORM): constraint table, data-binding vs direct set, `save()` returning null, `failOnError`, timestamps, unique, dynamic finders, a misspelled finder, a where-query, update and delete. That's 21 tests, giving 73 unit tests in total.
+- `UserPersistenceIntegrationSpec` (real Hibernate + H2): the row lands in `users.password_hash`, the database's own UNIQUE constraint rejects a duplicate when validation is skipped, finders run SQL. That's 3 tests, giving 7 integration tests in total. All pass.
+- Checked by hand in Postgres: `\d users` shows `username varchar(30) not null`, `password_hash not null`, and a UNIQUE constraint on `username`. `create table user (...)` really is a syntax error in Postgres.
+
+**Problems hit, and how they were solved**
+1. **Grails 8 made properties nullable by default.** `new User()` with no username passed `validate()`, and `User.constrainedProperties.username.nullable` was `true`. That held in the unit-test GORM and in real Hibernate, even for a class with no constraints at all. This is a documented Grails 8 change (it now matches JPA/Bean Validation). Most tutorials, and the Grails 7 docs, still say "not nullable by default". Fixed with explicit `nullable: false`. `blank: false` alone does not reject null.
+2. **`new User(username: '')` stored null, not `''`,** so the error code was `nullable` instead of `blank`. The map constructor goes through Grails data binding, which converts empty strings to null (`grails.databinding.convertEmptyStringsToNull`, on by default). Setting the property directly keeps `''` and triggers `blank`. Both are pinned down in `UserSpec`.
+3. **`User.existsByUsername` doesn't exist in GORM** (Spring Data has `existsBy`). It throws `MissingMethodException`. Use `countBy...` or `findBy... != null`.
+4. **A misspelled finder (`findByUsernam`) throws `InvalidDataAccessResourceUsageException`, not `MissingMethodException`.** GORM recognises the `findBy` shape, then fails on the unknown property `usernam`. Both are only found when the code runs.
+5. **The Postgres `users` table first came out with nullable `username`/`password_hash`.** The learner's IntelliJ app (DevTools) hot-restarted on an early build of `User` (before `nullable: false`) and created the table. `dbCreate: update` never alters existing columns. Fixed by dropping the (empty) table and restarting; the columns are now `not null`.
+
+**Open items**
+- `Instant` is stored as `timestamp without time zone`, converted using the JVM's time zone. Consider `hibernate.jdbc.time_zone: UTC` before timestamps matter (Round 7 file dates).
+- `User` would render `passwordHash` if passed to `as JSON`. Round 6's `GET /api/me` must render a map of chosen fields, not the domain object.
+- The `naem` typo from Round 1 in `ClosuresSpec` is still there.
+
+**Commits**
+- `Round 4: add User domain class with constraints, users table mapping and GORM unit/integration specs`
+
 ---
 
 ## Upcoming rounds
-
-### Round 4: Domain classes and GORM
-- Create a `User` domain class with `username` (unique, not blank) and `passwordHash`.
-- **Gotcha:** `user` is a reserved word in Postgres. Map the table with `static mapping = { table 'users' }` or a similar name.
-- Cover constraints, dynamic finders (`User.findByUsername`), `save()`/`validate()`/`errors`, and `dbCreate`.
-- Write a `DomainUnitTest`.
-- With Postgres running, `dbCreate: update` creates the `users` table. Look at it with `docker compose -f compose.dev.yml exec postgres psql -U storage storage` → `\d users`.
 
 ### Round 5: Registration and BCrypt
 - Add `UserService`, and explain dependency injection by name.
 - Use a command object (a validated DTO) for the request.
 - Define a `BCryptPasswordEncoder` bean from `spring-security-crypto` in `resources.groovy`.
-- Build `POST /api/auth/register`, returning 201, 400 or 409.
+- Build `POST /api/auth/register`, returning 201, 400 or 409. Lowercase the username before saving. A 409 comes from the `unique` validation error, but also catch `DataIntegrityViolationException` for two simultaneous registrations.
 - Write a `ServiceUnitTest` and a `ControllerUnitTest`.
 
 ### Round 6: Login, JWT and the auth interceptor
 - Add a `JwtService` using `nimbus-jose-jwt`, with the secret coming from the environment (`JWT_SECRET` in `.env`/`.env.example`, added to `Application.REQUIRED_SETTINGS`).
 - Build `POST /api/auth/login`, which returns a token.
 - Add an `AuthInterceptor` that protects `/api/**` except the auth endpoints. Compare it to the Spring Security filter chain.
-- Build `GET /api/me`, which returns the logged-in user.
+- Build `GET /api/me`, which returns the logged-in user. Render chosen fields only, never `passwordHash`.
 
 ### Round 7: Upload, list, download and delete files
 - Create a `StoredFile` domain class: owner, original name, content type, size, storage key (a UUID) and date created.
