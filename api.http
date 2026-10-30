@@ -1,0 +1,9 @@
+### Requests for trying the API by hand.
+### In IntelliJ, click the green ▶ next to a request to send it. The app must be running (the "Grails App" run config).
+### Each round adds its new endpoints here.
+
+### Health check: should return {"message":"pong","environment":"development"}
+GET http://localhost:9030/api/ping
+
+### Unknown URL: should return a JSON 404
+GET http://localhost:9030/api/does-not-exist

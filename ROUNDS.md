@@ -6,13 +6,13 @@ This file records what has been done, the problems hit along the way, and what c
 
 ## Current status
 
-**Next up: Round 2. Tour of Grails and your first endpoint.**
+**Next up: Round 3. Postgres, `.env` and the Docker dev setup.**
 
 | # | Round | Status | Commit |
 |---|---|---|---|
 | 1 | Groovy crash course and IntelliJ setup | ✅ Done | `5319da4`, `5dde12b` |
-| 2 | Tour of Grails and your first endpoint | ⏭️ Next | |
-| 3 | Postgres, `.env` and the Docker dev setup | ⬜ | |
+| 2 | Tour of Grails and your first endpoint | ✅ Done | _(fill in the hash after committing)_ |
+| 3 | Postgres, `.env` and the Docker dev setup | ⏭️ Next | |
 | 4 | Domain classes and GORM (`User`) | ⬜ | |
 | 5 | Registration and BCrypt | ⬜ | |
 | 6 | Login, JWT and the auth interceptor | ⬜ | |
@@ -54,6 +54,9 @@ A user uploads files and can **share** them with other users. The uploader alway
 - **Files are stored on local disk** (a Docker volume in production) under random UUID names, never the user's filename. Details about each file are stored in Postgres.
 - **Sharing is read-only.** Shared users can view and download a file. Only the owner can delete it or share it further.
 - **Tests are written every round**, not all at the end.
+- **Every route is listed explicitly in `UrlMappings.groovy`.** The generated catch-all `/$controller/$action?/$id?` was removed in Round 2. Use `get`/`post`/`put`/`delete "/api/..."(controller: ..., action: ...)`.
+- **Errors are returned as JSON.** `ErrorController` handles the `"404"` and `"500"` mappings. A 500 never reveals exception details to the client.
+- **`api.http`** (IntelliJ HTTP Client) holds example requests for trying the API by hand. Add every new endpoint to it.
 
 ---
 
@@ -86,15 +89,46 @@ A user uploads files and can **share** them with other users. The uploader alway
 - `Round 1: add Groovy/Spock learning specs, IntelliJ run configs, and set server port to 9030`
 - `Load Mockito as a test JVM agent to remove self-attach and CDS warnings`
 
+### Round 2: Tour of Grails and your first endpoint ✅
+
+**What was explained**
+- Grails folder conventions mapped to Spring Boot:
+  - `controllers/*Controller` ↔ `@RestController`
+  - `services/` ↔ `@Service`
+  - `domain/` ↔ `@Entity` + repository
+  - `UrlMappings` ↔ `@RequestMapping`
+  - `*Interceptor` ↔ filters
+  - `resources.groovy` ↔ `@Bean`
+  - `BootStrap` ↔ `CommandLineRunner`
+- Grails environments (development, test, production) and how they relate to Spring profiles.
+- Controller "actions", rendering JSON with `as JSON`, and what `@Integration` does.
+
+**What was built**
+- `PingController`: `GET /api/ping` returns `{"message":"pong","environment":"development"}`.
+- `ErrorController` with JSON 404 (`{"error":"Not Found","path":...}`) and JSON 500 (`{"error":"Internal Server Error"}`).
+- `UrlMappings.groovy` rewritten: explicit routes only, with 404 and 500 going to `ErrorController`.
+- Deleted `views/index.gsp`, `views/error.gsp`, `views/notFound.gsp` and the Geb test `BasicStorageSpec`.
+- Tests: `PingControllerSpec`, `ErrorControllerSpec` (`ControllerUnitTest`) and `UrlMappingsSpec` (`UrlMappingsUnitTest`, including negative cases), giving 47 unit tests. Plus `PingApiIntegrationSpec` (`@Integration`, real HTTP calls), with 3 integration tests. All pass.
+- `api.http`: requests to send from IntelliJ's HTTP Client.
+
+**Problems hit, and how they were solved**
+1. **The generated catch-all route exposed everything.** `"/$controller/$action?/$id?"` made every action of every controller reachable at `/controller/action`, with any HTTP method. Spring developers don't expect that. Removed it, and `UrlMappingsSpec` now checks that `/ping/index` doesn't route.
+2. **The wrong HTTP method gives 404, not 405.** `POST /api/ping` returns 404 in Grails, where Spring would return 405. This was confirmed with curl and is pinned down in the integration test.
+3. **Removing the welcome page would have broken `BasicStorageSpec`.** That generated Geb browser test checked the welcome page title, and it needs Docker for a browser container. It was replaced with `PingApiIntegrationSpec`, which uses plain `java.net.http.HttpClient` and `JsonSlurper`.
+4. **Finding the server port in an `@Integration` test.** Grails' `@Integration` is `@SpringBootTest(RANDOM_PORT)` underneath. Get the port with `@Value('${local.server.port}') Integer serverPort`.
+5. **Verified:** the Grails environment is also activated as a Spring profile. The log shows `The following 1 profile is active: "development"`, so both `environments:` blocks and `application-<env>.yml` files work.
+6. **Verified:** a real exception produces a JSON 500 with no details sent to the client. The full stack trace is logged at ERROR by Grails' `StackTrace` logger. This was checked with a temporary throwing controller, which was then removed.
+
+**Open items**
+- The `naem` typo from Round 1 in `ClosuresSpec` is still there.
+- GSP leftovers are now unused but kept for the optional GSP UI extra: `views/layouts/main.gsp`, `grails-app/assets/`, the webjars, the Geb dependency, and the `grails-gsp`/asset-pipeline Gradle plugins. They could be removed later if the UI extra is skipped.
+
+**Commits**
+- `Round 2: add /api/ping, JSON error responses and explicit URL mappings; remove welcome page`
+
 ---
 
 ## Upcoming rounds
-
-### Round 2: Tour of Grails and your first endpoint ⏭️
-- Explain the Grails folder conventions by mapping them to Spring Boot: controllers ↔ `@RestController`, services ↔ `@Service`, domain ↔ `@Entity` + repository, `UrlMappings` ↔ `@RequestMapping`, interceptors ↔ filters, `resources.groovy` ↔ `@Bean`, `BootStrap` ↔ `CommandLineRunner`.
-- Explain Grails environments (`environments:` blocks in `application.yml`) vs Spring profiles.
-- Build `GET /api/ping`, which returns JSON, plus a `ControllerUnitTest` for it.
-- Remove the generated welcome page (`grails-app/views/index.gsp` and the `"/"` mapping). **Also remove or replace** `src/integration-test/groovy/com/example/BasicStorageSpec.groovy`, a Geb browser test that checks the welcome page title, or it will break.
 
 ### Round 3: Postgres, `.env` and the Docker dev setup
 - Replace H2 with Postgres. Add the `org.postgresql:postgresql` runtime dependency (its version is managed by the BOM).

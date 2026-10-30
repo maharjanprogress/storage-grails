@@ -10,7 +10,8 @@ Read **`ROUNDS.md`**. It records which round is next, what each finished round b
 
 - Explain every Grails or Groovy concept **for a beginner**, mapped to the Spring Boot equivalent the user already knows.
 - **Write the code yourself.** Comment wherever Groovy or Grails does something surprising.
-- Add **Spock tests** for whatever the round builds, and run them (`./gradlew test --rerun`) before saying the round is done.
+- Add **Spock tests** for whatever the round builds, and run them (`./gradlew test --rerun`, plus `./gradlew integrationTest` when integration specs exist) before saying the round is done.
+- Add every new endpoint to **`api.http`** so the user can try it from IntelliJ.
 - Finish with the commands the user should run to see it working, plus a **one-line commit message** in a code block. Don't commit unless the user asks.
 
 ## Keep ROUNDS.md up to date (required)
