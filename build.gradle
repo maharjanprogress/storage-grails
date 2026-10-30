@@ -60,13 +60,19 @@ dependencies {
     implementation "org.springframework.boot:spring-boot-autoconfigure"
     implementation "org.springframework.boot:spring-boot-starter"
     implementation "org.springframework.boot:spring-boot-starter-actuator"
+    // Holds DataSourceHealthIndicator, the "db" check behind /actuator/health (see resources.groovy).
+    // Spring Boot 4 split its JDBC support out of the main autoconfigure jar into this module.
+    implementation "org.springframework.boot:spring-boot-jdbc"
     implementation "org.springframework.boot:spring-boot-starter-logging"
     implementation "org.springframework.boot:spring-boot-starter-tomcat"
     implementation "org.springframework.boot:spring-boot-starter-validation"
     implementation "org.springframework.boot:spring-boot-tomcat"
     runtimeOnly "cloud.wondrify:asset-pipeline-grails"
-    runtimeOnly "com.h2database:h2"
     runtimeOnly "com.zaxxer:HikariCP"
+    // Postgres JDBC driver; the Grails BOM picks the version, like Spring Boot's parent POM does
+    runtimeOnly "org.postgresql:postgresql"
+    // H2 is only needed by tests now (the "test" environment in application.yml), until Round 9
+    testRuntimeOnly "com.h2database:h2"
     integrationTestImplementation testFixtures("org.apache.grails:grails-geb")
     testImplementation "org.apache.grails:grails-testing-support-datamapping"
     testImplementation "org.apache.grails:grails-testing-support-web"

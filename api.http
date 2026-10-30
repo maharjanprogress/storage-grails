@@ -7,3 +7,7 @@ GET http://localhost:9030/api/ping
 
 ### Unknown URL: should return a JSON 404
 GET http://localhost:9030/api/does-not-exist
+
+### Round 3: Actuator health. "components.db" should be UP with "database": "PostgreSQL"
+### (If db says H2, you're running tests' config. If the app won't start, check that Postgres is up and .env exists.)
+GET http://localhost:9030/actuator/health

@@ -43,3 +43,7 @@ out/
 Thumbs.db
 .DS_Store
 target/
+
+### Secrets ###
+# Real config with passwords. Commit .env.example instead.
+.env

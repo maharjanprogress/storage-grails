@@ -1,0 +1,59 @@
+# Development setup: Postgres plus the app running from source.
+#
+#   docker compose -f compose.dev.yml up -d postgres   # just Postgres, run the app from IntelliJ
+#   docker compose -f compose.dev.yml up --build       # Postgres AND the app, both in Docker
+#   docker compose -f compose.dev.yml down             # stop (add -v to also delete the data)
+#
+# Compose reads .env from this folder automatically and uses it to fill in the ${...} below.
+# That does NOT put the variables inside the containers: only `environment:` and `env_file:` do.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      # The official image creates this database and user the first time the volume is empty.
+      # Changing them later does nothing until you delete the volume (down -v).
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      # host:container. Your machine reaches it on DB_PORT, other containers always on 5432.
+      - "${DB_PORT}:5432"
+    volumes:
+      # Postgres 18 images keep their data under /var/lib/postgresql (older ones used .../data)
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    # Every line of .env becomes an environment variable inside the container...
+    env_file: .env
+    # ...and these override it. Inside Docker, "localhost" is the app container itself, so the
+    # app must reach Postgres by its service name, on the container port.
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+    ports:
+      - "${APP_PORT:-9030}:9030"
+    volumes:
+      - .:/app
+      # The container runs as root. Without these two, its build output would land in your
+      # project's build/ and .gradle/ folders owned by root, and your next local build would
+      # fail with "permission denied". These hide those folders behind container-only volumes.
+      - /app/build
+      - /app/.gradle
+      - gradle-home:/gradle-home
+    depends_on:
+      postgres:
+        # Wait for the healthcheck above, not just for the container to start
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  gradle-home:

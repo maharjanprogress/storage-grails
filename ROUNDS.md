@@ -6,14 +6,14 @@ This file records what has been done, the problems hit along the way, and what c
 
 ## Current status
 
-**Next up: Round 3. Postgres, `.env` and the Docker dev setup.**
+**Next up: Round 4. Domain classes and GORM (`User`).**
 
 | # | Round | Status | Commit |
 |---|---|---|---|
 | 1 | Groovy crash course and IntelliJ setup | ✅ Done | `5319da4`, `5dde12b` |
-| 2 | Tour of Grails and your first endpoint | ✅ Done | _(fill in the hash after committing)_ |
-| 3 | Postgres, `.env` and the Docker dev setup | ⏭️ Next | |
-| 4 | Domain classes and GORM (`User`) | ⬜ | |
+| 2 | Tour of Grails and your first endpoint | ✅ Done | `87993b5` |
+| 3 | Postgres, `.env` and the Docker dev setup | ✅ Done | _(fill in the hash after committing)_ |
+| 4 | Domain classes and GORM (`User`) | ⏭️ Next | |
 | 5 | Registration and BCrypt | ⬜ | |
 | 6 | Login, JWT and the auth interceptor | ⬜ | |
 | 7 | Upload, list, download and delete files | ⬜ | |
@@ -44,7 +44,7 @@ A user uploads files and can **share** them with other users. The uploader alway
 | Build | Gradle 9.8 wrapper, `compileJava.options.release = 21` |
 | JDK on the dev PC | 25 (the build targets 21; Docker images will use 21) |
 | Server port | `9030` (`grails-app/conf/application.yml`) |
-| Database | H2 for now, Postgres from Round 3 |
+| Database | Postgres 18 (`postgres:18-alpine`) in development. The `test` environment still uses in-memory H2 until Round 9 |
 | Base package | `com.example` |
 
 ## Decisions made
@@ -57,6 +57,9 @@ A user uploads files and can **share** them with other users. The uploader alway
 - **Every route is listed explicitly in `UrlMappings.groovy`.** The generated catch-all `/$controller/$action?/$id?` was removed in Round 2. Use `get`/`post`/`put`/`delete "/api/..."(controller: ..., action: ...)`.
 - **Errors are returned as JSON.** `ErrorController` handles the `"404"` and `"500"` mappings. A 500 never reveals exception details to the client.
 - **`api.http`** (IntelliJ HTTP Client) holds example requests for trying the API by hand. Add every new endpoint to it.
+- **Config comes from environment variables, with `.env` for local values.** `application.yml` uses `${DB_HOST:localhost}`-style placeholders. `.env` is gitignored; `.env.example` is committed and must list every variable without a default (`EnvExampleSpec` enforces this). New secrets (e.g. `JWT_SECRET` in Round 6) go in both files, and into `Application.REQUIRED_SETTINGS` if the app can't start without them.
+- **The `test` environment stays on H2 until Round 9**, so `./gradlew integrationTest` needs no Docker yet. H2 is a `testRuntimeOnly` dependency.
+- **Development uses `dbCreate: update`** (keeps data across restarts). Production is `none`, and Round 10 adds migrations.
 
 ---
 
@@ -126,23 +129,51 @@ A user uploads files and can **share** them with other users. The uploader alway
 **Commits**
 - `Round 2: add /api/ping, JSON error responses and explicit URL mappings; remove welcome page`
 
+### Round 3: Postgres, `.env` and the Docker dev setup ✅
+
+**What was explained**
+- Spring Boot never reads `.env`. Docker Compose does, in two separate ways: for `${...}` interpolation inside the compose file (automatic), and as container environment variables (only with `env_file:` / `environment:`).
+- `spring.config.import: optional:file:.env[.properties]` makes Spring load `.env` as a properties file when running from IntelliJ or `bootRun`. `optional:` means no error if it's missing; `[.properties]` names the format because the file has no extension. The path is relative to the **working directory**.
+- Precedence: real environment variables beat values imported from `.env`. That's how `compose.dev.yml` swaps `DB_HOST=localhost` for `DB_HOST=postgres`.
+- Inside a container, `localhost` is the container itself, so the app reaches Postgres by service name on the container port (5432), not on the host-mapped port.
+- The Spring Bean DSL in `resources.groovy` (`beanName(Class, ref('otherBean'))`) ↔ `@Bean` methods.
+
+**What was built**
+- `build.gradle`: `runtimeOnly "org.postgresql:postgresql"`, H2 moved to `testRuntimeOnly`, plus `spring-boot-jdbc` (for the health indicator class).
+- `application.yml`: `spring.config.import` for `.env`; the datasource is Postgres, built from `DB_HOST`, `DB_PORT`, `DB_NAME` (with defaults) and `DB_USERNAME`, `DB_PASSWORD` (no defaults); development uses `dbCreate: update`; the `test` environment overrides everything back to H2; `management.endpoint.health.show-details: always`.
+- `.env.example` (committed) and `.env` (gitignored, made with `cp .env.example .env`).
+- `Dockerfile.dev` (`eclipse-temurin:21-jdk`, runs `./gradlew bootRun` on the mounted source) and `compose.dev.yml` (Postgres 18 with a healthcheck and a named volume; the app with `env_file: .env`, `DB_HOST: postgres`, `depends_on: service_healthy`; host port `${APP_PORT:-9030}`).
+- `resources.groovy`: a `dbHealthIndicator` bean, so `/actuator/health` shows `components.db`.
+- `Application.groovy` implements `EnvironmentAware` and fails fast with a clear message when a datasource placeholder has no value.
+- Tests: `ApplicationSpec` (the startup check), `EnvExampleSpec` (every required `${VAR}` in `application.yml` and `compose.dev.yml` is in `.env.example`; `.env` is gitignored), giving 52 unit tests. `HealthApiIntegrationSpec` (health is UP with a db check), giving 4 integration tests. All pass.
+- Checked by hand: `/actuator/health` shows `db: UP, database: PostgreSQL` both from `bootRun` and with the app running inside `compose.dev.yml`.
+
+**Problems hit, and how they were solved**
+1. **`/actuator/health` had no `db` check, even with Postgres connected.** Two causes. (a) Spring Boot 4 moved the JDBC health indicator into a separate `spring-boot-jdbc` module that Grails doesn't pull in. (b) Even after adding it, Boot's auto-configuration only creates the check if a `DataSource` bean already exists when auto-configuration runs, and GORM registers `dataSource` later. Fixed by registering `DataSourceHealthIndicator` by hand in `resources.groovy` (bean name `dbHealthIndicator` → component `db`). Adding `spring-boot-jdbc` did **not** create a second connection pool (checked: only `HikariPool-1`).
+2. **A missing `.env` didn't stop the app; it used the literal text `${DB_USERNAME}` as the username.** Plain Spring Boot fails with "Could not resolve placeholder", but Grails' config loader silently keeps unresolved placeholders. Postgres then rejected a user named `${DB_USERNAME}` and Hibernate failed with a confusing `JdbcEnvironment` error. A check in `BootStrap` was tried first and was useless, because with Postgres the failure happens while the context is built, **before** `BootStrap.init` runs. Fixed in `Application.setEnvironment` (it runs before Hibernate): Spring's `Environment.getProperty` *does* throw `PlaceholderResolutionException`, which is rethrown with a "copy .env.example to .env" message.
+3. **Verified:** a real environment variable overrides `.env` (`DB_PASSWORD=wrong ./gradlew bootRun` logged in as `storage` from `.env` with the wrong password).
+4. **Running the app container as root would have left root-owned files in `build/` and `.gradle/`**, breaking the next local build with "permission denied". Fixed with anonymous volumes for `/app/build` and `/app/.gradle` in `compose.dev.yml`, and Gradle's downloads in a named `gradle-home` volume. Checked: no root-owned files in the project after a container run.
+5. **Postgres 18 images keep data under `/var/lib/postgresql`**, not `/var/lib/postgresql/data` like older versions, so the volume is mounted there.
+6. **`EnvExampleSpec` first flagged `${NAME}` from an example in a yml comment.** The spec now ignores `#` comment lines.
+7. **The IntelliJ app stopped serving on 9030 while `build.gradle`/config changed under it** (DevTools restart with the old classpath). Restart the run config after reloading Gradle.
+
+**Open items**
+- The learner edited `.run/Grails App.run.xml` in IntelliJ (JRE 21, module renamed `storage-grails.main` → `basicStorage.main`, `WORKING_DIRECTORY` line removed). Not committed by Claude. Because `.env` is read relative to the working directory, the run config must start in the project folder; IntelliJ's default for a Gradle module usually is the project folder, but re-add `$PROJECT_DIR$` if the app can't find `.env`.
+- The `naem` typo from Round 1 in `ClosuresSpec` is still there.
+
+**Commits**
+- `Round 3: switch to Postgres with .env config, add Docker dev setup and a db health check`
+
 ---
 
 ## Upcoming rounds
-
-### Round 3: Postgres, `.env` and the Docker dev setup
-- Replace H2 with Postgres. Add the `org.postgresql:postgresql` runtime dependency (its version is managed by the BOM).
-- Read the datasource settings and secrets from environment variables.
-- Create a `.env` file and **add it to `.gitignore`**, and commit a `.env.example` alongside it.
-- Explain that Spring Boot does not read `.env` by itself: Docker Compose does. Running from IntelliJ needs another way in, for example `spring.config.import: optional:file:.env[.properties]`. Verify that this works in Grails before teaching it.
-- Create `Dockerfile.dev` and `compose.dev.yml` (Postgres plus the app running from source).
-- Check that it works through `/actuator/health`.
 
 ### Round 4: Domain classes and GORM
 - Create a `User` domain class with `username` (unique, not blank) and `passwordHash`.
 - **Gotcha:** `user` is a reserved word in Postgres. Map the table with `static mapping = { table 'users' }` or a similar name.
 - Cover constraints, dynamic finders (`User.findByUsername`), `save()`/`validate()`/`errors`, and `dbCreate`.
 - Write a `DomainUnitTest`.
+- With Postgres running, `dbCreate: update` creates the `users` table. Look at it with `docker compose -f compose.dev.yml exec postgres psql -U storage storage` → `\d users`.
 
 ### Round 5: Registration and BCrypt
 - Add `UserService`, and explain dependency injection by name.
@@ -152,7 +183,7 @@ A user uploads files and can **share** them with other users. The uploader alway
 - Write a `ServiceUnitTest` and a `ControllerUnitTest`.
 
 ### Round 6: Login, JWT and the auth interceptor
-- Add a `JwtService` using `nimbus-jose-jwt`, with the secret coming from the environment.
+- Add a `JwtService` using `nimbus-jose-jwt`, with the secret coming from the environment (`JWT_SECRET` in `.env`/`.env.example`, added to `Application.REQUIRED_SETTINGS`).
 - Build `POST /api/auth/login`, which returns a token.
 - Add an `AuthInterceptor` that protects `/api/**` except the auth endpoints. Compare it to the Spring Security filter chain.
 - Build `GET /api/me`, which returns the logged-in user.
@@ -169,7 +200,7 @@ A user uploads files and can **share** them with other users. The uploader alway
 - Enforce the rules: only the owner can delete or reshare a file, and shared users can only view and download it.
 
 ### Round 9: Integration tests
-- Write `@Integration` tests against Postgres running in Testcontainers (Testcontainers 2.0.5 is managed by the Spring Boot BOM).
+- Write `@Integration` tests against Postgres running in Testcontainers (Testcontainers 2.0.5 is managed by the Spring Boot BOM). Remove the H2 `test` environment override and the `testRuntimeOnly` H2 dependency, and make `HealthApiIntegrationSpec` expect `PostgreSQL`.
 - Test the whole story: A and B register, A uploads a file and shares it with B, B downloads it, and B gets refused when deleting it.
 
 ### Round 10: Production

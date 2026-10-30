@@ -12,25 +12,49 @@ grails:
       encoding: UTF-8
       codecs:
         scriptlet: html
+# Where extra config comes from. Spring Boot (and so Grails) never reads a .env file on its own:
+# Docker Compose is what reads .env. This line makes Spring load .env as a .properties file too,
+# so DB_HOST, DB_PASSWORD etc. are also defined when you start the app from IntelliJ or bootRun.
+#   optional:   don't fail if the file is missing (in Docker there is no .env inside the container)
+#   [.properties]: the file has no extension Spring knows, so tell it which format to parse
+# Real environment variables still WIN over values from .env (Spring's precedence order),
+# which is how compose.dev.yml can swap DB_HOST=localhost for DB_HOST=postgres.
+spring:
+  config:
+    import: optional:file:.env[.properties]
+
+# ${NAME} is a Spring placeholder: it's replaced by the property or environment variable NAME.
+# ${NAME:default} uses "default" when NAME isn't set. The username and password have NO default
+# on purpose: a password belongs in .env, not in a committed file.
+# Careful: unlike plain Spring Boot, Grails does NOT fail when a placeholder has no value. It keeps
+# the literal text "${DB_PASSWORD}". Application.groovy checks for that and stops the app with a
+# clear message instead.
 dataSource:
-  driverClassName: org.h2.Driver
-  username: sa
-  password: ''
+  driverClassName: org.postgresql.Driver
+  url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:storage}
+  username: ${DB_USERNAME}
+  password: ${DB_PASSWORD}
   pooled: true
   jmxExport: true
 environments:
   development:
     dataSource:
-      dbCreate: create-drop
-      url: jdbc:h2:mem:devDb;LOCK_TIMEOUT=10000;DB_CLOSE_ON_EXIT=FALSE
+      # update: Hibernate creates missing tables/columns at startup and never drops anything,
+      # so your data survives restarts. (create-drop, the old H2 setting, wipes it every time.)
+      dbCreate: update
   test:
+    # Tests keep using an in-memory H2 database for now, so `./gradlew integrationTest` needs no
+    # Postgres. Round 9 swaps this for a real Postgres started by Testcontainers.
     dataSource:
+      driverClassName: org.h2.Driver
       dbCreate: update
       url: jdbc:h2:mem:testDb;LOCK_TIMEOUT=10000;DB_CLOSE_ON_EXIT=FALSE
+      username: sa
+      password: ''
   production:
     dataSource:
+      # Never let Hibernate change a production schema. Round 10 adds proper migrations.
       dbCreate: none
-      url: jdbc:h2:./prodDb;LOCK_TIMEOUT=10000;DB_CLOSE_ON_EXIT=FALSE
 hibernate:
   cache:
     queries: false
@@ -39,3 +63,11 @@ hibernate:
 
 server:
   port: 9030
+
+# Actuator's /actuator/health. By default it only says {"status":"UP"}. "always" also lists each
+# check (db, diskSpace, ...), so you can SEE that Postgres is connected. Fine for learning; in
+# production you'd show details only to authorised users.
+management:
+  endpoint:
+    health:
+      show-details: always

@@ -1,0 +1,19 @@
+# Development image: a JDK plus Gradle, running the app straight from the source code.
+# The source isn't copied in: compose.dev.yml mounts the project folder at /app instead, so the
+# container always runs whatever is on your disk right now.
+# (Round 10 writes the real production Dockerfile, which builds a jar and runs that.)
+
+# The build targets Java 21 (compileJava.options.release = 21), so the image uses JDK 21
+FROM eclipse-temurin:21-jdk
+
+WORKDIR /app
+
+# Gradle keeps its downloads (the Gradle distribution, every dependency jar) here.
+# compose.dev.yml puts a named volume on this folder, so they're downloaded once, not on every start.
+ENV GRADLE_USER_HOME=/gradle-home
+
+EXPOSE 9030
+
+# bootRun compiles the code and starts the app, like `mvn spring-boot:run`.
+# --no-daemon: inside a container there's no later build to reuse a background Gradle daemon.
+CMD ["./gradlew", "bootRun", "--no-daemon"]
